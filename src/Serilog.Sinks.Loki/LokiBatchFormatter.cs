@@ -51,20 +51,7 @@ namespace Serilog.Sinks.Loki
                 foreach (LokiLabel globalLabel in GlobalLabels)
                     stream.Labels.Add(new LokiLabel(globalLabel.Key, globalLabel.Value));
 
-                var localTime = DateTime.Now;
-                var localTimeAndOffset = new DateTimeOffset(localTime, TimeZoneInfo.Local.GetUtcOffset(localTime));
-                var time = localTimeAndOffset.ToString("o");
-
-                foreach (KeyValuePair<string, LogEventPropertyValue> property in logEvent.Properties)
-                    // Some enrichers pass strings with quotes surrounding the values inside the string,
-                    // which results in redundant quotes after serialization and a "bad request" response.
-                    // To avoid this, remove all quotes from the value.
-                    // We also remove any \r\n newlines and replace with \n new lines to prevent "bad request" responses
-                    // We also remove backslashes and replace with forward slashes, Loki doesn't like those either
-                    stream.Labels.Add(new LokiLabel(property.Key, property.Value.ToString().Replace("\"", "").Replace("\r\n", "\n").Replace("\\", "/")));
-
-
-
+                var time = logEvent.Timestamp.ToString("o");
                 var sb = new StringBuilder();
                 sb.AppendLine(logEvent.RenderMessage());
                 if (logEvent.Exception != null)
@@ -85,13 +72,14 @@ namespace Serilog.Sinks.Loki
                     // To avoid this, remove all quotes from the value.
                     // We also remove any \r\n newlines and replace with \n new lines to prevent "bad request" responses
                     // We also remove backslashes and replace with forward slashes, Loki doesn't like those either
-                    var propertyValue = property.Value.ToString().Replace("\"", "").Replace("\r\n", "\n").Replace("\\", "/");
+                    var propertyValue = property.Value.ToString().Replace("\r\n", "\n");
 
                     switch (DetermineHandleActionForProperty(property.Key))
                     {
                         case HandleAction.Discard:
                             continue;
                         case HandleAction.SendAsLabel:
+                            propertyValue = propertyValue.Replace("\"", "").Replace("\\", "/");
                             stream.Labels.Add(new LokiLabel(property.Key, propertyValue));
                             break;
                         case HandleAction.AppendToMessage:
@@ -102,8 +90,7 @@ namespace Serilog.Sinks.Loki
 
                 // Loki doesn't like \r\n for new line, and we can't guarantee the message doesn't have any
                 // in it, so we replace \r\n with \n on the final message
-                // We also flip backslashes to forward slashes, Loki doesn't like those either.
-                stream.Entries.Add(new LokiEntry(time, sb.ToString().Replace("\\", "/").Replace("\r\n", "\n")));
+                stream.Entries.Add(new LokiEntry(time, sb.ToString().Replace("\r\n", "\n")));
             }
 
             if (content.Streams.Count > 0)
@@ -117,10 +104,13 @@ namespace Serilog.Sinks.Loki
 
         private static string GetLevel(LogEventLevel level)
         {
-            if (level == LogEventLevel.Information)
-                return "info";
-
-            return level.ToString().ToLower();
+            switch (level)
+            {
+                case LogEventLevel.Verbose: return "trace";
+                case LogEventLevel.Information: return "info";
+                case LogEventLevel.Fatal: return "critical";
+                default: return level.ToString().ToLower();
+            }
         }
 
         private HandleAction DetermineHandleActionForProperty(string propertyName)
